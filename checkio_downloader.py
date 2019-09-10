@@ -68,7 +68,7 @@ class CheckIOSolution:
                                  '(?P<user_name>[^/]+)/[^/]+/'
                                  '(?P<solution_title_slug>[^/]+)/share/'
                                  '(?P<solution_hash>[a-z0-f]+)/?$', re.IGNORECASE)
-    
+
     DEFAULT_FORMAT_STR = '{mission_title_slug}.{extension}'
 
     def __init__(self, url):
@@ -105,14 +105,10 @@ class CheckIOSolution:
         if invalid_fields:
             raise CheckIOSolution.InvalidFormatKeyError('Invalid format key: "{}"'.format('", "'.join(invalid_fields)))
         return format_str.format_map({field: getattr(self, field) for field in needed_fields})
-        
+
     @property
     def source_code(self):
         return self.solution_source
-
-    @property
-    def attr_dict(self):
-        return {attr: getattr(self, attr, '') for attr in CheckIOSolution.FORMAT_STR_DICT_FIELDS}
 
     def __str__(self):
         result = []
@@ -198,7 +194,6 @@ class CheckIODownloader:
                     print('OK - new')
                     self.stats['new'].add(solution_meta)
                 self.solutions.append(solution)
-                break
             except CheckIOSolution.InvalidFormatKeyError as excp:
                 print(f'FAIL: {excp}, QUITTING')
                 sys.exit(1)
