@@ -42,7 +42,7 @@ the same names.
                             "posted_at", "solution_category", "solution_hash",
                             "solution_title", "solution_title_slug", "url",
                             "user_name" (default:
-                            "{mission_title_slug}.{extension})"
+                            "{mission_title_slug}.{extension}")
     --overwrite           overwrite existing files
     --dry-run             dry run, do not (over-)write files
 

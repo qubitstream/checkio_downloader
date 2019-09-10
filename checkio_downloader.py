@@ -231,7 +231,7 @@ if __name__ == '__main__':
                         help='filename format for the solution files (without extension). This is in Pythons '
                         'string formatting syntax. All values are strings except "posted_at", which is of type '
                         '"datetime.date". Possible keys are: '
-                        '"{}" (default: "%(default)s)"'.format(
+                        '"{}" (default: "%(default)s")'.format(
                             '", "'.join(sorted(CheckIOSolution.FORMAT_STR_DICT_FIELDS))))
     parser.add_argument('--overwrite', action='store_true', default=False,
                         help='overwrite existing files')
