@@ -26,6 +26,7 @@ import argparse
 import datetime
 import os
 import re
+import string
 import sys
 import urllib.parse
 import urllib.request
@@ -50,9 +51,16 @@ def get_schema_and_domain_from_url(url):
 
 
 class CheckIOSolution:
-    FIELDS = set(
-        'extension title url user_name src posted_at solution_hash solution_title_slug solution_source '
-        'mission_title mission_title_slug tag'.split())
+    class InvalidFormatKeyError(Exception):
+        pass
+
+    FIELDS_BY_HTML = set('html posted_at solution_source solution_title mission_title solution_category'.split())
+
+    FIELDS_BY_URL = set('url extension mission_title_slug user_name solution_title_slug solution_hash'.split())
+
+    ALL_FIELDS = FIELDS_BY_HTML | FIELDS_BY_URL
+
+    FORMAT_STR_DICT_FIELDS = ALL_FIELDS - {'html', 'solution_source'}
 
     SOLUTION_URL_RE = re.compile(r'^(?:http(s)?:\/\/)?'
                                  '(?P<extension>\w+)\.checkio\.org/mission/'
@@ -60,46 +68,61 @@ class CheckIOSolution:
                                  '(?P<user_name>[^/]+)/[^/]+/'
                                  '(?P<solution_title_slug>[^/]+)/share/'
                                  '(?P<solution_hash>[a-z0-f]+)/?$', re.IGNORECASE)
+    
+    DEFAULT_FORMAT_STR = '{mission_title_slug}.{extension}'
 
     def __init__(self, url):
         m = CheckIOSolution.SOLUTION_URL_RE.match(url)
         if not m:
             raise ValueError(f'Is not a valid solution URL: {url}')
-        for field in self.FIELDS:
+        for field in CheckIOSolution.FIELDS_BY_URL:
             setattr(self, field, m.groupdict().get(field, ''))
         self.url = url
         self.extension = self.extension.lower()
-        self.processed = False
+        self._processed = False
 
     def process_url(self):
-        self.src = get_url(self.url)
-        soup = BeautifulSoup(self.src, features='html.parser')
-        self.solution_source = soup.select('noscript pre[class^=brush]')[0].get_text()
+        self.html = get_url(self.url)
+        soup = BeautifulSoup(self.html, features='html.parser')
         date_str = soup.select('noscript p[style="text-align: center;"]')[0].get_text(strip=True)
         self.posted_at = datetime.datetime.strptime(date_str, '%B %d, %Y').date()
-        self.solution_title = soup.select('noscript p > b')[0].get_text(strip=True)
         self.mission_title = soup.select('noscript p > a')[1].get_text(strip=True)
-        self.tag = soup.select('noscript p > a')[0].get_text(strip=True)
-        self.processed = True
+        self.solution_title = soup.select('noscript p > b')[0].get_text(strip=True)
+        self.solution_category = soup.select('noscript p > a')[0].get_text(strip=True)
+        self.solution_source = soup.select('noscript pre[class^=brush]')[0].get_text()
+        self._processed = True
 
-    @property
-    def filename(self):
-        return '{0.mission_title_slug}.{0.extension}'.format(self)
+    def __getattr__(self, name):
+        if name in CheckIOSolution.FIELDS_BY_HTML:
+            if not self._processed:
+                self.process_url()
+        return self.__getattribute__(name)
 
+    def filename(self, format_str=None):
+        format_str = format_str or CheckIOSolution.DEFAULT_FORMAT_STR
+        needed_fields = {t[1] for t in string.Formatter().parse(format_str)}
+        invalid_fields = needed_fields - CheckIOSolution.FORMAT_STR_DICT_FIELDS
+        if invalid_fields:
+            raise CheckIOSolution.InvalidFormatKeyError('Invalid format key: "{}"'.format('", "'.join(invalid_fields)))
+        return format_str.format_map({field: getattr(self, field) for field in needed_fields})
+        
     @property
     def source_code(self):
-        if not self.processed:
-            self.process_url()
         return self.solution_source
+
+    @property
+    def attr_dict(self):
+        return {attr: getattr(self, attr, '') for attr in CheckIOSolution.FORMAT_STR_DICT_FIELDS}
 
     def __str__(self):
         result = []
-        for field in self.FIELDS - {'src', 'solution_source'}:
+        for field in self.FIELDS_BY_URL:
             result.append('{0}="{1}"'.format(field, getattr(self, field)))
         return '\n'.join(result)
 
 
 class CheckIODownloader:
+
     SolutionMeta = namedtuple('SolutionMeta', 'url mission_title solution_title')
 
     USER_SOLUTIONS_URL_RE = re.compile(r'^(?:http(s)?:\/\/)?'
@@ -107,9 +130,10 @@ class CheckIODownloader:
                                        '(?P<user_name>[^/]+)/solutions/share/'
                                        '(?P<user_hash>[a-z0-f]+)/?$', re.IGNORECASE)
 
-    def __init__(self, url, output_directory, overwrite=False, dry_run=False):
+    def __init__(self, url, output_directory, filename_format='', overwrite=False, dry_run=False):
         self.url = url
         self.output_directory = output_directory
+        self.filename_format_str = filename_format
         self.overwrite = overwrite
         self.dry_run = dry_run
 
@@ -120,12 +144,18 @@ class CheckIODownloader:
 
     def parse_solution_urls(self):
         self.solutions_meta = []
+        m = CheckIOSolution.SOLUTION_URL_RE.match(self.url)
+        if m:
+            solution_meta = CheckIODownloader.SolutionMeta(
+                url=self.url, mission_title=m.group('mission_title_slug'),
+                solution_title=m.group('solution_title_slug'))
+            self.solutions_meta = [solution_meta]
+            return
 
         m = CheckIODownloader.USER_SOLUTIONS_URL_RE.match(self.url)
         if not m:
             raise ValueError(f'Not a user solutions URL: {self.url}')
 
-        schema_domain = get_schema_and_domain_from_url(self.url)
         soup = BeautifulSoup(get_url(self.url), features='html.parser')
 
         solution_rows = soup.select('div.block_progress.block_progress__container')
@@ -152,14 +182,14 @@ class CheckIODownloader:
                 title = '{0.mission_title} | {0.solution_title}'.format(solution_meta)[:50]
                 print(f'[ {i:>4} / {len(self.solutions_meta):<4} ] [ {title:50} ] ... ', end='')
                 solution = CheckIOSolution(solution_meta.url)
-                to_file = os.path.join(self.output_directory, solution.filename)
+                to_file = os.path.join(self.output_directory, solution.filename(format_str=self.filename_format_str))
                 if os.path.exists(to_file):
-                    self.stats['existing'].add(solution_meta)
+                    self.stats['existing'].add(solution)
                     if self.overwrite:
                         if not self.dry_run:
                             self.write_file(to_file, solution.source_code)
                         print('OK - already existing, overwritten')
-                        self.stats['overwritten'].add(solution_meta)
+                        self.stats['overwritten'].add(solution)
                     else:
                         print('OK - already existing, skipped')
                 else:
@@ -168,9 +198,13 @@ class CheckIODownloader:
                     print('OK - new')
                     self.stats['new'].add(solution_meta)
                 self.solutions.append(solution)
+                break
+            except CheckIOSolution.InvalidFormatKeyError as excp:
+                print(f'FAIL: {excp}, QUITTING')
+                sys.exit(1)
             except Exception as excp:
                 print(f'FAIL: {excp}')
-                self.stats['error'].add(solution_meta)
+                self.stats['error'].add(solution)
 
     def __str__(self):
         result = ['CheckIODownloader Statistics{}'.format('' if not self.dry_run else ' (DRY RUN)')]
@@ -183,15 +217,22 @@ class CheckIODownloader:
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(
-        description='Parses and downloads checkio solutions',
+        description='Parses and downloads CheckiO solutions',
         epilog='Written by Christoph Haunschmidt')
 
-    parser.add_argument('url', metavar='USER_SHARE_URL',
-                        help='shareable user solutions URL (at checkio.org, go to "Profile" > "Progress" '
-                        'and copy the share URL)')
+    parser.add_argument('url', metavar='CHECKIO_URL',
+                        help='shareable user solutions (at checkio.org, go to "Profile" > "Progress" '
+                        'and copy the share URL) or single solution URL')
     parser.add_argument('-o', '--output-directory', default=os.getcwd(),
                         help='output directory for writing solution source files '
                         '(default: the current working directory)')
+    parser.add_argument('--filename-format', default=CheckIOSolution.DEFAULT_FORMAT_STR,
+                        metavar='FORMAT_IN_PYTHON_FORMAT_SYNTAX',
+                        help='filename format for the solution files (without extension). This is in Pythons '
+                        'string formatting syntax. All values are strings except "posted_at", which is of type '
+                        '"datetime.date". Possible keys are: '
+                        '"{}" (default: "%(default)s)"'.format(
+                            '", "'.join(sorted(CheckIOSolution.FORMAT_STR_DICT_FIELDS))))
     parser.add_argument('--overwrite', action='store_true', default=False,
                         help='overwrite existing files')
     parser.add_argument('--dry-run', action='store_true', default=False,
