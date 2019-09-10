@@ -9,9 +9,13 @@ given directory (if the solution is missing there).
 The share URL is public, you can find it by accessing your "Profile" at 
 [CheckiO](https://checkio.org) and navigating to "Progress".
 
-__NOTE__: Be careful with the output file format, if you have multiple
-solutions for a mission, they could be overwritten if the filename results in
-the same names.
+__Note on the filename-format__: 
+ - Be careful with the output file format, if you have multiple
+   solutions for a mission, they could be overwritten if the filename results
+   in the same names.
+ - Also be aware that using some fields (`mission_title`, `solution_title`)
+   can yield incompatible / invalid filenames for the file system. A safe bet
+   is to use the slug fields only for names
 
 ## Usage
 
